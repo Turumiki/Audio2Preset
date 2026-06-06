@@ -104,7 +104,7 @@ StagedResult StagedMatcher::run(Factory factory, const juce::AudioBuffer<float>&
                     a = inst->render(n, v, dur, g);
                     if (inst->renderFailed()) return 1.0e9;
                 }
-                return (Loss::peakAbs(a) > 1.0e-4f) ? L.combined(target, a, 1.0f, 1.0f) : 1.0e9;
+                return (Loss::peakAbs(a) > 1.0e-4f) ? L.combined(target, a, 1.0f, 1.0f, cfg.robustLoss) : 1.0e9;
             };
             double bn = 1.0e30;
             for (int n = cfg.baseNote - 12; n <= cfg.baseNote + 12 && !stopFlag.load(); ++n) { double l = score(n, 100, 0.7f); if (l < bn) { bn = l; perfNote = n; } }
@@ -121,7 +121,27 @@ StagedResult StagedMatcher::run(Factory factory, const juce::AudioBuffer<float>&
     // ---- Staged parameter optimisation (multiple passes: stages interact, so re-running
     // the sequence keeps improving; the accept-if-better guard prevents any regression) ----
     std::vector<float> bestFull = baseline;
-    double lastLoss = -1.0;
+    double lastLoss = 1.0e30;
+    {
+        auto inst = factory();
+        if (inst) {
+            auto apply = [&](IRenderTarget* w) {
+                for (int i = 0; i < w->numParams() && i < (int) bestFull.size(); ++i)
+                    w->setParam(i, bestFull[(size_t) i]);
+            };
+            apply(inst.get());
+            auto audio = inst->render(perfNote, perfVel, dur, perfGate);
+            if (inst->renderFailed()) {
+                inst = factory();
+                if (inst) { apply(inst.get()); audio = inst->render(perfNote, perfVel, dur, perfGate); }
+            }
+            if (inst && !inst->renderFailed() && Loss::peakAbs(audio) > 1.0e-4f) {
+                Loss L;
+                lastLoss = L.combined(target, audio, 1.0f, 0.3f, cfg.robustLoss);
+                if (onImprove) onImprove(bestFull, lastLoss, perfNote, perfVel, perfGate);
+            }
+        }
+    }
     const bool unlimited = (cfg.passes <= 0);   // 0 => loop until requestStop()
     const int passes = juce::jmax(1, cfg.passes);
     for (int pass = 0; (unlimited || pass < passes) && !stopFlag.load(); ++pass) {
@@ -143,7 +163,7 @@ StagedResult StagedMatcher::run(Factory factory, const juce::AudioBuffer<float>&
             if (stopFlag.load()) engine.requestStop();   // stop set between creating and running
             auto res = engine.run();
             activeEngine = nullptr;
-            if (res.bestLoss < lastLoss || lastLoss < 0) {
+            if (res.bestLoss < lastLoss) {
                 bestFull = res.bestFullParams; lastLoss = res.bestLoss;
                 if (onImprove) onImprove(bestFull, lastLoss, perfNote, perfVel, perfGate);  // live apply
             }
@@ -153,7 +173,7 @@ StagedResult StagedMatcher::run(Factory factory, const juce::AudioBuffer<float>&
     }
 
     result.bestParams = bestFull;
-    result.bestLoss = (lastLoss < 0) ? 0.0 : lastLoss;
+    result.bestLoss = (lastLoss >= 1.0e29) ? 0.0 : lastLoss;
     result.note = perfNote; result.velocity = perfVel; result.gate = perfGate;
     return result;
 }

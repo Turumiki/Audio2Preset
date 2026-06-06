@@ -216,13 +216,13 @@ void MatchingEngine::searchLoop(long budgetRemaining, double& globalBest, int& t
             auto t = makeWorker();
             if (t == nullptr) return {};
             applyTo(t.get());
-            return t->render(cfg.midiNote, cfg.velocity, fullDurSec);
+            return t->render(cfg.midiNote, cfg.velocity, fullDurSec, cfg.gateFrac);
         }
         applyTo(workers[0].get());
-        auto a = workers[0]->render(cfg.midiNote, cfg.velocity, fullDurSec);
+        auto a = workers[0]->render(cfg.midiNote, cfg.velocity, fullDurSec, cfg.gateFrac);
         if (workers[0]->renderFailed()) {
             sawCrash.store(true); workerFresh[0] = 1; workers[0] = makeWorker();
-            if (workers[0] != nullptr) { applyTo(workers[0].get()); a = workers[0]->render(cfg.midiNote, cfg.velocity, fullDurSec); }
+            if (workers[0] != nullptr) { applyTo(workers[0].get()); a = workers[0]->render(cfg.midiNote, cfg.velocity, fullDurSec, cfg.gateFrac); }
         }
         return a;
     };
@@ -379,11 +379,11 @@ void MatchingEngine::searchBayes(long budgetRemaining, double& globalBest, int& 
                 w->setParam(cfg.freeParams[k], (float) freeVals[k]);
         };
         if (workerFresh[0]) { auto t = makeWorker(); if (!t) return {}; applyTo(t.get());
-                              return t->render(cfg.midiNote, cfg.velocity, fullDurSec); }
+                              return t->render(cfg.midiNote, cfg.velocity, fullDurSec, cfg.gateFrac); }
         applyTo(workers[0].get());
-        auto a = workers[0]->render(cfg.midiNote, cfg.velocity, fullDurSec);
+        auto a = workers[0]->render(cfg.midiNote, cfg.velocity, fullDurSec, cfg.gateFrac);
         if (workers[0]->renderFailed()) { sawCrash.store(true); workerFresh[0] = 1; workers[0] = makeWorker();
-            if (workers[0]) { applyTo(workers[0].get()); a = workers[0]->render(cfg.midiNote, cfg.velocity, fullDurSec); } }
+            if (workers[0]) { applyTo(workers[0].get()); a = workers[0]->render(cfg.midiNote, cfg.velocity, fullDurSec, cfg.gateFrac); } }
         return a;
     };
 

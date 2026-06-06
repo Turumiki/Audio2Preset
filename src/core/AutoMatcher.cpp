@@ -1,5 +1,6 @@
 #include "AutoMatcher.h"
 #include "Loss.h"
+#include "ParamPriority.h"
 #include <algorithm>
 #include <numeric>
 #include <random>
@@ -107,20 +108,24 @@ AutoResult AutoMatcher::run(Factory factory, const juce::AudioBuffer<float>& tar
     // ---- EXCLUDE by regex (default "MIDI CC"): freeze matching params, never search them ----
     // Params like "MIDI CC 17" / "Macro Control" map EXTERNAL MIDI input; they don't shape the
     // synth's own sound, so searching them only wastes budget. Matching names stay at baseline.
-    std::vector<int> searchable; int excluded = 0;
+    std::vector<int> searchable; int regexExcluded = 0, inertExcluded = 0;
     {
         bool haveRx = false; std::regex rx;
         const std::string pat = cfg.excludeRegex.trim().toStdString();
         if (!pat.empty()) { try { rx = std::regex(pat, std::regex::icase); haveRx = true; } catch (...) { haveRx = false; } }
         for (int i = 0; i < np; ++i) {
-            if (haveRx && std::regex_search(probe->paramInfo(i).name.toStdString(), rx)) { ++excluded; continue; }
+            const auto info = probe->paramInfo(i);
+            if (haveRx && std::regex_search(info.name.toStdString(), rx)) { ++regexExcluded; continue; }
+            if (categorizeParam(info.name) == ParamCat::Ignore) { ++inertExcluded; continue; }
             searchable.push_back(i);
         }
     }
-    if (searchable.empty()) { searchable.resize((size_t) np); std::iota(searchable.begin(), searchable.end(), 0); excluded = 0; }
+    if (searchable.empty()) { searchable.resize((size_t) np); std::iota(searchable.begin(), searchable.end(), 0); regexExcluded = 0; inertExcluded = 0; }
     const int nSearch = (int) searchable.size();
-    if (onProgress) onProgress(0, 0, nSearch, "Excluded " + juce::String(excluded)
-                               + " param(s) by regex; searching " + juce::String(nSearch), -1.0, 0.0);
+    if (onProgress) onProgress(0, 0, nSearch, "Excluded " + juce::String(regexExcluded + inertExcluded)
+                               + " param(s) (regex " + juce::String(regexExcluded)
+                               + ", inert " + juce::String(inertExcluded)
+                               + "); searching " + juce::String(nSearch), -1.0, 0.0);
 
     // ---- IMPACT RANK: perturb each searchable param once, measure |loss change| (parallel) ----
     // Orders the blocks so the most influential parameters are tuned first.
@@ -170,12 +175,43 @@ AutoResult AutoMatcher::run(Factory factory, const juce::AudioBuffer<float>& tar
 
     // ---- BLOCK-COORDINATE DESCENT, cycled until stop, with restart on stagnation ----
     std::vector<float> bestFull = baseline;
-    double bestLoss = -1.0;
+    double bestLoss = 1.0e30;
     std::mt19937 rng(1234u);
     std::uniform_real_distribution<float> uni(0.0f, 1.0f);
     int pass = 0, stagnantPasses = 0;
     long totalEvals = 0;   // cumulative evaluations across all blocks (for tries/sec readout)
     int tickCount = 0;
+
+    auto scoreFull = [&](const std::vector<float>& full,
+                         juce::AudioBuffer<float>* outAudio) -> double {
+        auto inst = factory();
+        auto apply = [&](IRenderTarget* w) {
+            for (int i = 0; i < w->numParams() && i < (int) full.size(); ++i)
+                w->setParam(i, full[(size_t) i]);
+        };
+        if (!inst) return 1.0e30;
+        apply(inst.get());
+        auto audio = inst->render(perfNote, perfVel, dur, perfGate);
+        if (inst->renderFailed()) {
+            inst = factory();
+            if (!inst) { if (outAudio) *outAudio = audio; return 1.0e30; }
+            apply(inst.get());
+            audio = inst->render(perfNote, perfVel, dur, perfGate);
+            if (inst->renderFailed()) { if (outAudio) *outAudio = audio; return 1.0e9; }
+        }
+        if (outAudio) *outAudio = audio;
+        if (Loss::peakAbs(audio) <= 1.0e-4f) return 1.0e9;
+        Loss L;
+        return L.combined(target, audio, 1.0f, 0.3f, cfg.robustLoss);
+    };
+
+    // Start from a real scored baseline. Otherwise the first CMA-ES block can
+    // overwrite a decent default with a worse candidate just because no prior
+    // loss was recorded yet.
+    juce::AudioBuffer<float> baselineAudio;
+    bestLoss = scoreFull(bestFull, &baselineAudio);
+    if (onImprove && std::isfinite(bestLoss) && bestLoss < 1.0e9)
+        onImprove(bestFull, bestLoss, perfNote, perfVel, perfGate, baselineAudio);
 
     while (!stopFlag.load() && (cfg.maxPasses <= 0 || pass < cfg.maxPasses)) {
         ++pass;
@@ -203,7 +239,7 @@ AutoResult AutoMatcher::run(Factory factory, const juce::AudioBuffer<float>& tar
             // Stream improvements live (animate the editor / refresh A-B as they happen)...
             auto onBestCb = [&](int, double loss, const std::vector<float>& full,
                                 const juce::AudioBuffer<float>& audio) {
-                if (bestLoss < 0 || loss < bestLoss) {
+                if (loss < bestLoss) {
                     bestFull = full; bestLoss = loss;
                     if (onImprove) onImprove(bestFull, bestLoss, perfNote, perfVel, perfGate, audio);
                 }
@@ -218,15 +254,15 @@ AutoResult AutoMatcher::run(Factory factory, const juce::AudioBuffer<float>& tar
             totalEvals = evalsBefore + res.evaluations;
 
             double improved = 0.0;
-            if (res.bestLoss < bestLoss || bestLoss < 0) {
-                improved = (bestLoss < 0) ? 0.0 : (bestLoss - res.bestLoss);
+            if (res.bestLoss < bestLoss) {
+                improved = bestLoss - res.bestLoss;
                 bestFull = res.bestFullParams; bestLoss = res.bestLoss;
                 if (onImprove) onImprove(bestFull, bestLoss, perfNote, perfVel, perfGate, juce::AudioBuffer<float>());
             }
             if (onProgress) onProgress(pass, bi + 1, (int) blocks.size(), blkNames[(size_t) bi], bestLoss, improved);
         }
 
-        const bool improvedThisPass = (bestLoss < passStart - 1.0e-6) || passStart < 0;
+        const bool improvedThisPass = bestLoss < passStart - 1.0e-6;
         stagnantPasses = improvedThisPass ? 0 : (stagnantPasses + 1);
     }
 
