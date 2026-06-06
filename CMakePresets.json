@@ -1,0 +1,23 @@
+{
+    "version": 3,
+    "cmakeMinimumRequired": { "major": 3, "minor": 22, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "default",
+            "displayName": "Default (VS 2022 x64, Release)",
+            "generator": "Visual Studio 17 2022",
+            "architecture": "x64",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "default",
+            "configurePreset": "default",
+            "configuration": "Release"
+        }
+    ]
+}

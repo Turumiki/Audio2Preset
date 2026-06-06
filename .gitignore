@@ -1,0 +1,72 @@
+# ==== guessynth .gitignore ====
+# Keep: src/, tools/, thirdparty/{bo,cmaes}/, CMakeLists.txt, CMakePresets.json
+
+# ---- CMake / build output (399 MB) ----
+/build/
+build/
+out/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+*.cmake.stamp
+
+# ---- Fetched/copied dependencies ----
+# JUCE is pulled by FetchContent (or copied to external/juce for offline reuse via
+# -DFETCHCONTENT_SOURCE_DIR_JUCE). ~74 MB+, never committed.
+/external/
+_deps/
+
+# ---- Generated audio / render artifacts (608 MB of test output) ----
+# WAV/MP3 renders, extracted .vital/.vitaltable/.state patches, feature dumps, logs.
+/artifacts/
+
+# ---- Third-party SDK that cannot be redistributed ----
+# Steinberg VST2.4 SDK (aeffect.h / aeffectx.h). Drop it in thirdparty/vst2sdk/ locally;
+# CMake auto-enables VST2 hosting when present (see CMakeLists.txt).
+/thirdparty/vst2sdk/
+
+# ---- Visual Studio / MSVC ----
+.vs/
+*.vcxproj.user
+*.suo
+*.user
+*.sln.docstates
+ipch/
+*.aps
+*.ncb
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+
+# ---- Build intermediates (any stray ones outside build/) ----
+*.obj
+*.o
+*.exe
+*.dll
+*.lib
+*.exp
+*.pdb
+*.ilk
+*.idb
+
+# ---- Python (tools/) ----
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# ---- App runtime data (lives in %APPDATA%\vst_match_studio, but ignore if copied in) ----
+*.props
+*.log
+crashed_plugin.txt
+
+# ---- OS junk ----
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
